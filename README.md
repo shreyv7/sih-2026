@@ -1,24 +1,25 @@
-# Pixel Perfect Prototype
+# Carbon Autopilot
 
-Implement exactly the screenshot and nothing else
+A hardware-agnostic campus carbon operating system for educational institutions.
 
-This project was built with [Lovable](https://lovable.dev).
+## Features
+- **Command Center**: Campus-wide emissions, budget utilization, intensity breakdown, and alert management.
+- **Buildings Drilldown**: Live 3D globe visualization and granular per-building telemetry, anomalies, and equipment logs.
+- **Action Lab**: Carbon vs. economics trade-off engine, budget-optimized interventions, and what-if simulation.
+- **Verification & MRV**: Post-intervention measurement, baseline comparison, and confidence scoring.
+- **Ask Engine**: Analytical AI assistant with evidence-first reasoning and data coverage awareness.
 
-## Build with Lovable
+## Tech Stack
+- **Framework**: TanStack Start (React 19)
+- **Styling**: Tailwind CSS v4
+- **Visualization**: Recharts, Three.js, Lucide Icons
+- **Routing & Querying**: TanStack Router & TanStack Query
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/11ea7422-6860-4546-8840-2f2727605ea1).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
-
-## Development
-
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+## Getting Started
 
 ```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
+npm install
 npm run dev
 ```
+
+The dev server runs on `http://localhost:8080`.

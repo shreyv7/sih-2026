@@ -1,10 +1,13 @@
-<!-- LOVABLE:BEGIN -->
-> [!IMPORTANT]
-> This project is connected to [Lovable](https://lovable.dev). Avoid rewriting
-> published git history — force pushing, or rebasing/amending/squashing commits
-> that are already pushed — as it rewrites history on Lovable's side and the
-> user will likely lose their project history.
->
-> Commits you push to the connected branch sync back to Lovable and show up in
-> the editor, so keep the branch in a working state.
-<!-- LOVABLE:END -->
+# Carbon Autopilot - Agent Guidelines
+
+This repository contains the frontend application for Carbon Autopilot (IHSIH021), a campus carbon operating system for educational institutions.
+
+## Architecture
+- **Framework**: TanStack Start (React 19) + Vite + Tailwind CSS
+- **Routing**: TanStack Router (file-based routing under `src/routes/`)
+- **State Management**: TanStack Query + React Context (`src/lib/carbon-store.tsx`)
+- **UI & Components**: Radix UI primitives, Lucide icons, Recharts, Three.js (globe visualization)
+
+## Development Workflow
+- `npm run dev` to start the local development server.
+- `npm run build` to create a production build.

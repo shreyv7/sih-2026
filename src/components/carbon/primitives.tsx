@@ -2,11 +2,7 @@ import { cn } from "@/lib/utils";
 import type { Confidence } from "@/lib/carbon-data";
 import type { ReactNode } from "react";
 
-export function Panel({
-  className,
-  children,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+export function Panel({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={cn("panel", className)} {...props}>
       {children}
@@ -118,7 +114,12 @@ export function KpiCard({
             {delta}
           </span>
         ) : null}
-        {note ? <span className="text-muted-foreground">{delta ? " · " : ""}{note}</span> : null}
+        {note ? (
+          <span className="text-muted-foreground">
+            {delta ? " · " : ""}
+            {note}
+          </span>
+        ) : null}
       </p>
     </Panel>
   );

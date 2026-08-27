@@ -12,6 +12,13 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useCarbon } from "@/lib/carbon-store";
 import { ApprovalsPanel } from "./approvals-panel";
@@ -26,8 +33,14 @@ const nav = [
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { pendingCount, setApprovalsOpen } = useCarbon();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isLandingRoute = pathname === "/";
+
+  if (isLandingRoute) {
+    return <div className="min-h-screen bg-background">{children}</div>;
+  }
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -84,7 +97,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span className="num grid size-5 shrink-0 place-items-center rounded bg-attention/20 text-[11px] font-semibold">
               {pendingCount}
             </span>
-            {!collapsed && <span className="truncate">actions awaiting approval</span>}
+            {!collapsed && (
+              <span className="truncate">{pendingCount} actions awaiting approval</span>
+            )}
           </button>
           <div className="flex items-center justify-between px-1">
             <button
@@ -102,7 +117,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <button
                 className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground"
                 aria-label="Settings"
-                onClick={() => setApprovalsOpen(false)}
+                onClick={() => setSettingsOpen(true)}
               >
                 <Settings className="size-4" />
               </button>
@@ -118,6 +133,29 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       <ApprovalsPanel />
+      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <SheetContent
+          side="right"
+          className="w-full overflow-y-auto border-border bg-background p-0 sm:max-w-sm"
+        >
+          <SheetHeader className="border-b border-border px-5 py-4 text-left">
+            <SheetTitle>Prototype notes</SheetTitle>
+            <SheetDescription>Presentation settings and dataset disclosures</SheetDescription>
+          </SheetHeader>
+          <div className="space-y-4 p-5 text-sm text-muted-foreground">
+            <div className="rounded-md border border-border bg-elevated/50 p-4">
+              Demo campus: <span className="text-foreground">MAHE · Manipal</span>
+            </div>
+            <div className="rounded-md border border-border bg-elevated/50 p-4">
+              Data source mode: <span className="text-foreground">Synthetic demo data</span>
+            </div>
+            <div className="rounded-md border border-border bg-elevated/50 p-4">
+              Emission factors and savings are modeled to support the pitch flow, not live
+              operations.
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
