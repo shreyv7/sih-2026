@@ -1,6 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import {
+  Cpu,
+  Layers,
+  Sparkles,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -16,6 +22,7 @@ import {
   Stat,
   StatusBadge,
 } from "@/components/carbon/primitives";
+import { AB3BuildingModal } from "@/components/carbon/ab3-building-modal";
 import { buildings, type Building } from "@/lib/carbon-data";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +43,7 @@ function BuildingsRoute() {
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [selected, setSelected] = useState<Building | null>(null);
+  const [modalBuildingId, setModalBuildingId] = useState<string | null>(null);
 
   const filtered = useMemo(
     () =>
@@ -83,7 +91,7 @@ function BuildingsRoute() {
       <Panel className="overflow-hidden">
         <PanelHeader
           title="Campus building performance"
-          subtitle={`${filtered.length} buildings shown · demo campus synthetic data`}
+          subtitle={`${filtered.length} buildings shown · live telemetry & synthetic baseline`}
         />
 
         <div className="hidden overflow-x-auto md:block">
@@ -97,33 +105,63 @@ function BuildingsRoute() {
                 <th className="px-5 py-3 font-medium">Trend</th>
                 <th className="px-5 py-3 font-medium">Data coverage</th>
                 <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium text-right">Action</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((building) => (
-                <tr
-                  key={building.id}
-                  onClick={() => setSelected(building)}
-                  className="cursor-pointer border-b border-border/80 transition-colors hover:bg-elevated/40"
-                >
-                  <td className="px-5 py-4 font-medium text-foreground">{building.name}</td>
-                  <td className="px-5 py-4 text-muted-foreground">{building.type}</td>
-                  <td className="num px-5 py-4 text-foreground">{building.energyMWh} MWh</td>
-                  <td className="num px-5 py-4 text-foreground">{building.tco2e} tCO₂e</td>
-                  <td
-                    className={cn(
-                      "num px-5 py-4 font-medium",
-                      building.trendPct > 0 ? "text-attention" : "text-primary",
-                    )}
+              {filtered.map((building) => {
+                const hasDigitalTwin = ["ab3", "b14", "kmc"].includes(building.id);
+                return (
+                  <tr
+                    key={building.id}
+                    onClick={() => setSelected(building)}
+                    className="cursor-pointer border-b border-border/80 transition-colors hover:bg-elevated/40"
                   >
-                    {building.trendPct > 0 ? "↑" : "↓"} {Math.abs(building.trendPct)}%
-                  </td>
-                  <td className="num px-5 py-4 text-foreground">{building.coverage}%</td>
-                  <td className="px-5 py-4">
-                    <StatusBadge status={building.status} />
-                  </td>
-                </tr>
-              ))}
+                    <td className="px-5 py-4 font-medium text-foreground">
+                      <div className="flex items-center gap-2">
+                        <span>{building.name}</span>
+                        {hasDigitalTwin && (
+                          <span className="rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2 py-0.5 text-[9px] font-semibold text-emerald-300">
+                            3D Twin
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4 text-muted-foreground">{building.type}</td>
+                    <td className="num px-5 py-4 text-foreground">{building.energyMWh} MWh</td>
+                    <td className="num px-5 py-4 text-foreground">{building.tco2e} tCO₂e</td>
+                    <td
+                      className={cn(
+                        "num px-5 py-4 font-medium",
+                        building.trendPct > 0 ? "text-attention" : "text-primary",
+                      )}
+                    >
+                      {building.trendPct > 0 ? "↑" : "↓"} {Math.abs(building.trendPct)}%
+                    </td>
+                    <td className="num px-5 py-4 text-foreground">{building.coverage}%</td>
+                    <td className="px-5 py-4">
+                      <StatusBadge status={building.status} />
+                    </td>
+                    <td className="px-5 py-4 text-right">
+                      {hasDigitalTwin ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setModalBuildingId(building.id);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-400/30 bg-emerald-950/40 px-2.5 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-900/60 transition cursor-pointer"
+                        >
+                          <Cpu className="size-3" />
+                          <span>3D Deep Dive</span>
+                        </button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Details</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -165,8 +203,22 @@ function BuildingsRoute() {
           {selected ? (
             <>
               <SheetHeader className="border-b border-border px-5 py-4 text-left">
-                <SheetTitle>{selected.name}</SheetTitle>
-                <SheetDescription>{selected.type} building performance overview</SheetDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <SheetTitle>{selected.name}</SheetTitle>
+                    <SheetDescription>{selected.type} building performance overview</SheetDescription>
+                  </div>
+                  {["ab3", "b14", "kmc"].includes(selected.id) && (
+                    <Button
+                      size="sm"
+                      onClick={() => setModalBuildingId(selected.id)}
+                      className="bg-emerald-500 text-slate-950 hover:bg-emerald-400 font-semibold text-xs"
+                    >
+                      <Cpu className="size-3.5 mr-1" />
+                      3D Twin View
+                    </Button>
+                  )}
+                </div>
               </SheetHeader>
               <div className="space-y-5 p-5">
                 <div className="flex flex-wrap items-center gap-3">
@@ -186,8 +238,7 @@ function BuildingsRoute() {
                       : "Primarily metered performance"}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Confidence is shown because some building-level components rely on modeled
-                    splits.
+                    Confidence is calculated using hardware-agnostic canonical ingestion streams.
                   </p>
                 </div>
 
@@ -278,6 +329,15 @@ function BuildingsRoute() {
           ) : null}
         </SheetContent>
       </Sheet>
+
+      {/* 3D Digital Twin Modal */}
+      {modalBuildingId && (
+        <AB3BuildingModal
+          isOpen={!!modalBuildingId}
+          onClose={() => setModalBuildingId(null)}
+          buildingId={modalBuildingId}
+        />
+      )}
     </div>
   );
 }

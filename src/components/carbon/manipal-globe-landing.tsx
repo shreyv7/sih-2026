@@ -1,12 +1,18 @@
 import { Link } from "@tanstack/react-router";
 import {
   ArrowRight,
+  Building2,
+  Cpu,
+  GraduationCap,
+  Home,
+  Library,
   MapPinned,
   Maximize2,
   Minimize2,
   Minus,
   Orbit,
   Plus,
+  Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap, Marker } from "maplibre-gl";
@@ -16,6 +22,8 @@ import { AB3BuildingModal } from "@/components/carbon/ab3-building-modal";
 
 const MANIPAL_CENTER: [number, number] = [74.7928, 13.3526];
 const AB3_COORDINATES: [number, number] = [74.79309, 13.35126];
+const B14_COORDINATES: [number, number] = [74.795507, 13.345226];
+const KMC_COORDINATES: [number, number] = [74.78710, 13.35590];
 
 type RegionHotspot = {
   id: string;
@@ -55,6 +63,24 @@ const hotspots: RegionHotspot[] = [
     pitch: 62,
     bearing: -28,
   },
+  {
+    id: "b14",
+    name: "Hostel Block 14 (B14)",
+    description: "MIT Manipal · 13.345226° N, 74.795507° E",
+    coordinates: B14_COORDINATES,
+    zoom: 17.8,
+    pitch: 64,
+    bearing: 22,
+  },
+  {
+    id: "kmc",
+    name: "KMC Central Library",
+    description: "KMC Manipal · 13.35590° N, 74.78710° E",
+    coordinates: KMC_COORDINATES,
+    zoom: 17.8,
+    pitch: 60,
+    bearing: -45,
+  },
 ];
 
 type HotspotMarkerEntry = {
@@ -72,8 +98,8 @@ export function ManipalGlobeLanding() {
   const focusRegionRef = useRef<(region: RegionHotspot) => void>(() => { });
   const selectedRegionRef = useRef<RegionHotspot | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<RegionHotspot | null>(null);
-  const [isOrbitingAB3, setIsOrbitingAB3] = useState(false);
-  const [isAB3ModalOpen, setIsAB3ModalOpen] = useState(false);
+  const [activeBuildingId, setActiveBuildingId] = useState<string>("ab3");
+  const [isBuildingModalOpen, setIsBuildingModalOpen] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -87,7 +113,6 @@ export function ManipalGlobeLanding() {
         setIsFullscreen(false);
       }
     } catch {
-      // Fallback if browser fullscreen request fails or is restricted
       setIsFullscreen((prev) => !prev);
     }
   };
@@ -98,6 +123,16 @@ export function ManipalGlobeLanding() {
 
   const handleZoomOut = () => {
     mapRef.current?.zoomOut({ duration: 300 });
+  };
+
+  const openBuildingTwin = (buildingId: string) => {
+    const targetHotspot = hotspots.find((h) => h.id === buildingId);
+    if (targetHotspot) {
+      focusRegionRef.current(targetHotspot);
+    } else {
+      setActiveBuildingId(buildingId);
+      setIsBuildingModalOpen(true);
+    }
   };
 
   useEffect(() => {
@@ -120,7 +155,7 @@ export function ManipalGlobeLanding() {
     if (mapRef.current) {
       setTimeout(() => {
         mapRef.current?.resize();
-      }, 150);
+      }, 300);
     }
   }, [isFullscreen]);
 
@@ -128,7 +163,7 @@ export function ManipalGlobeLanding() {
     let cancelled = false;
 
     const bootMap = async () => {
-      if (!containerRef.current) return;
+      if (!containerRef.current || mapRef.current) return;
 
       const maplibregl = await import("maplibre-gl");
       if (cancelled || !containerRef.current) return;
@@ -137,39 +172,30 @@ export function ManipalGlobeLanding() {
         container: containerRef.current,
         style: {
           version: 8,
-          projection: { type: "globe" },
           sources: {
-            satellite: {
+            osm: {
               type: "raster",
               tiles: [
                 "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
               ],
               tileSize: 256,
-              maxzoom: 18,
-              attribution: "Esri, Maxar, Earthstar Geographics",
+              attribution: "Esri World Imagery",
             },
           },
           layers: [
             {
-              id: "background",
-              type: "background",
-              paint: { "background-color": "#020612" },
+              id: "osm-layer",
+              type: "raster",
+              source: "osm",
+              minzoom: 0,
+              maxzoom: 22,
             },
-            { id: "satellite", type: "raster", source: "satellite" },
           ],
         },
         center: [64, 18],
         zoom: 1.55,
-        minZoom: 1,
-        maxZoom: 20,
         pitch: 26,
         bearing: 0,
-        scrollZoom: true,
-        dragPan: true,
-        dragRotate: true,
-        touchZoomRotate: true,
-        touchPitch: true,
-        doubleClickZoom: true,
         attributionControl: false,
       });
 
@@ -187,30 +213,27 @@ export function ManipalGlobeLanding() {
 
       const startRotation = () => {
         stopRotation();
-        setIsOrbitingAB3(false);
-
-        const loop = () => {
-          if (!mapRef.current || selectedRegionRef.current || isUserInteracting) return;
-          const bearing = mapRef.current.getBearing();
-          mapRef.current.rotateTo(bearing + 0.06, { duration: 0 });
-          rotationFrameRef.current = requestAnimationFrame(loop);
+        const rotate = () => {
+          if (!mapRef.current || isUserInteracting || selectedRegionRef.current) return;
+          const currentCenter = mapRef.current.getCenter();
+          const nextLng = (currentCenter.lng + 0.045) % 360;
+          mapRef.current.setCenter([nextLng, currentCenter.lat]);
+          rotationFrameRef.current = requestAnimationFrame(rotate);
         };
-
-        rotationFrameRef.current = requestAnimationFrame(loop);
+        rotationFrameRef.current = requestAnimationFrame(rotate);
       };
 
       beginRotationRef.current = startRotation;
 
-      // 3D Orbiting animation around AB3 Building
-      const startAB3Orbit = () => {
+      // 3D Orbiting animation around active building
+      const startBuildingOrbit = (coords: [number, number]) => {
         stopRotation();
-        setIsOrbitingAB3(true);
 
         const orbitLoop = () => {
-          if (!mapRef.current || selectedRegionRef.current?.id !== "ab3" || isUserInteracting) return;
+          if (!mapRef.current || !["ab3", "b14", "kmc"].includes(selectedRegionRef.current?.id || "") || isUserInteracting) return;
           const currentBearing = mapRef.current.getBearing();
           mapRef.current.rotateTo(currentBearing + 0.16, { duration: 0 });
-          mapRef.current.setCenter(AB3_COORDINATES);
+          mapRef.current.setCenter(coords);
           mapRef.current.setPitch(66);
           rotationFrameRef.current = requestAnimationFrame(orbitLoop);
         };
@@ -228,8 +251,13 @@ export function ManipalGlobeLanding() {
         if (resumeTimeout) clearTimeout(resumeTimeout);
         resumeTimeout = setTimeout(() => {
           isUserInteracting = false;
-          if (selectedRegionRef.current?.id === "ab3") {
-            startAB3Orbit();
+          const curId = selectedRegionRef.current?.id;
+          if (curId === "ab3") {
+            startBuildingOrbit(AB3_COORDINATES);
+          } else if (curId === "b14") {
+            startBuildingOrbit(B14_COORDINATES);
+          } else if (curId === "kmc") {
+            startBuildingOrbit(KMC_COORDINATES);
           } else if (!selectedRegionRef.current) {
             startRotation();
           }
@@ -272,13 +300,13 @@ export function ManipalGlobeLanding() {
       }
 
       const updateMarkers = (currentZoom: number, activeRegionId: string | null) => {
+        const isBuildingActive = ["ab3", "b14", "kmc"].includes(activeRegionId || "");
         markersRef.current.forEach(({ id, element }) => {
-          if (id === "ab3") {
-            const showAB3 = activeRegionId === "manipal" || activeRegionId === "ab3" || currentZoom >= 13.5;
-            element.style.display = showAB3 ? "inline-flex" : "none";
+          if (id === "ab3" || id === "b14" || id === "kmc") {
+            const showBuilding = activeRegionId === "manipal" || isBuildingActive || currentZoom >= 13.5;
+            element.style.display = showBuilding ? "inline-flex" : "none";
           } else if (id === "manipal") {
-            // Hide Manipal overall tag when in zoomed-in mode so only AB3 is pinned
-            const isZoomedIn = activeRegionId === "manipal" || activeRegionId === "ab3" || currentZoom >= 12.5;
+            const isZoomedIn = activeRegionId === "manipal" || isBuildingActive || currentZoom >= 12.5;
             element.style.display = isZoomedIn ? "none" : "inline-flex";
           } else if (id === "india") {
             element.style.display = currentZoom >= 8 ? "none" : "inline-flex";
@@ -289,7 +317,6 @@ export function ManipalGlobeLanding() {
       const focusRegion = (region: RegionHotspot) => {
         selectedRegionRef.current = region;
         setSelectedRegion(region);
-        setIsOrbitingAB3(false);
         stopRotation();
 
         map.flyTo({
@@ -297,25 +324,26 @@ export function ManipalGlobeLanding() {
           zoom: region.zoom,
           pitch: region.pitch,
           bearing: region.bearing,
-          duration: 3600,
+          duration: 3200,
           curve: 1.45,
           essential: true,
         });
 
         updateMarkers(region.zoom, region.id);
 
-        if (region.id === "ab3") {
+        if (region.id === "ab3" || region.id === "b14" || region.id === "kmc") {
+          setActiveBuildingId(region.id);
           map.once("moveend", () => {
-            if (selectedRegionRef.current?.id === "ab3") {
-              startAB3Orbit();
-              setIsAB3ModalOpen(true);
+            if (selectedRegionRef.current?.id === region.id) {
+              startBuildingOrbit(region.coordinates);
+              setIsBuildingModalOpen(true);
             }
           });
           setTimeout(() => {
-            if (selectedRegionRef.current?.id === "ab3") {
-              setIsAB3ModalOpen(true);
+            if (selectedRegionRef.current?.id === region.id) {
+              setIsBuildingModalOpen(true);
             }
-          }, 1200);
+          }, 1100);
         }
       };
 
@@ -335,13 +363,13 @@ export function ManipalGlobeLanding() {
           // Fallback if environment doesn't support fog
         }
 
-
         markersRef.current = hotspots.map((region) => {
           const element = document.createElement("button");
           element.type = "button";
-          element.className = `globe-hotspot ${region.id === "ab3" ? "globe-hotspot--target" : ""}`;
-          // Hide AB3 initially in global view until Manipal is visited
-          if (region.id === "ab3") {
+          const isBuilding = ["ab3", "b14", "kmc"].includes(region.id);
+          element.className = `globe-hotspot ${isBuilding ? "globe-hotspot--target" : ""}`;
+          
+          if (isBuilding) {
             element.style.display = "none";
           }
           element.innerHTML = `
@@ -385,7 +413,6 @@ export function ManipalGlobeLanding() {
   const resetExperience = () => {
     selectedRegionRef.current = null;
     setSelectedRegion(null);
-    setIsOrbitingAB3(false);
     const map = mapRef.current;
     if (!map) return;
 
@@ -399,7 +426,7 @@ export function ManipalGlobeLanding() {
     });
 
     markersRef.current.forEach(({ id, element }) => {
-      if (id === "ab3") element.style.display = "none";
+      if (id === "ab3" || id === "b14" || id === "kmc") element.style.display = "none";
       if (id === "manipal" || id === "india") element.style.display = "inline-flex";
     });
 
@@ -408,13 +435,13 @@ export function ManipalGlobeLanding() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#020612] text-white select-none">
-      {/* Universal Space & Cosmic Nebula Background (Uniform across the entire page) */}
+      {/* Universal Space & Cosmic Nebula Background */}
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_82%_18%,rgba(255,225,160,0.22),transparent_25%),radial-gradient(circle_at_80%_20%,rgba(255,180,90,0.12),transparent_40%),radial-gradient(circle_at_20%_45%,rgba(35,85,155,0.16),transparent_45%),radial-gradient(circle_at_50%_100%,rgba(12,30,65,0.3),transparent_60%),linear-gradient(180deg,#030917_0%,#020612_55%,#01040a_100%)]" />
 
-      {/* Universal Starfield Layer 1 (Twinkling stars across the full viewport) */}
+      {/* Universal Starfield Layer 1 */}
       <div className="pointer-events-none absolute inset-0 opacity-85 [background-image:radial-gradient(2px_2px_at_25px_35px,#fff,rgba(0,0,0,0)),radial-gradient(1.5px_1.5px_at_65px_120px,#93c5fd,rgba(0,0,0,0)),radial-gradient(1px_1px_at_140px_60px,#fff,rgba(0,0,0,0)),radial-gradient(2px_2px_at_200px_160px,#fde047,rgba(0,0,0,0)),radial-gradient(1.5px_1.5px_at_280px_90px,#fff,rgba(0,0,0,0)),radial-gradient(2px_2px_at_340px_220px,#a7f3d0,rgba(0,0,0,0)),radial-gradient(1px_1px_at_410px_140px,#fff,rgba(0,0,0,0)),radial-gradient(2.5px_2.5px_at_490px_50px,#ffffff,rgba(0,0,0,0))] [background-repeat:repeat] [background-size:520px_520px]" />
 
-      {/* Universal Starfield Layer 2 (Fainter depth stars across the full viewport) */}
+      {/* Universal Starfield Layer 2 */}
       <div className="pointer-events-none absolute inset-0 opacity-65 [background-image:radial-gradient(1.5px_1.5px_at_80px_230px,#fff,rgba(0,0,0,0)),radial-gradient(2px_2px_at_170px_310px,#38bdf8,rgba(0,0,0,0)),radial-gradient(1px_1px_at_240px_380px,#fff,rgba(0,0,0,0)),radial-gradient(2px_2px_at_360px_270px,#fed7aa,rgba(0,0,0,0)),radial-gradient(1.5px_1.5px_at_440px_390px,#fff,rgba(0,0,0,0))] [background-repeat:repeat] [background-size:580px_580px]" />
 
       {/* Glowing Celestial Sun Flare in Space */}
@@ -433,6 +460,57 @@ export function ManipalGlobeLanding() {
                 <br />
                 mapping for MAHE.
               </h1>
+
+              <p className="text-sm text-slate-300 leading-relaxed">
+                Explore real-time continuous telemetry, AI root-cause diagnostics, and closed-loop optimization across Manipal's primary facility assets.
+              </p>
+
+              {/* Quick Building Launch Cards */}
+              <div className="space-y-2 pt-1">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Featured 3D Digital Twins
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => openBuildingTwin("ab3")}
+                    className="flex flex-col text-left rounded-2xl border border-white/10 bg-white/5 p-3 hover:border-emerald-400/50 hover:bg-emerald-950/20 transition cursor-pointer group shadow"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <GraduationCap className="size-4 text-emerald-400 group-hover:scale-110 transition" />
+                      <span className="text-[9px] font-bold text-emerald-300 uppercase px-1.5 py-0.5 rounded bg-emerald-500/20">65 kWp</span>
+                    </div>
+                    <strong className="text-xs text-white font-semibold group-hover:text-emerald-300">AB3 MIT</strong>
+                    <span className="text-[10px] text-slate-400">Academic & Chiller</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => openBuildingTwin("b14")}
+                    className="flex flex-col text-left rounded-2xl border border-white/10 bg-white/5 p-3 hover:border-emerald-400/50 hover:bg-emerald-950/20 transition cursor-pointer group shadow"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <Home className="size-4 text-cyan-400 group-hover:scale-110 transition" />
+                      <span className="text-[9px] font-bold text-cyan-300 uppercase px-1.5 py-0.5 rounded bg-cyan-500/20">180 kWp</span>
+                    </div>
+                    <strong className="text-xs text-white font-semibold group-hover:text-cyan-300">B14 Hostel</strong>
+                    <span className="text-[10px] text-slate-400">12 Floors · 360 Rms</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => openBuildingTwin("kmc")}
+                    className="flex flex-col text-left rounded-2xl border border-white/10 bg-white/5 p-3 hover:border-emerald-400/50 hover:bg-emerald-950/20 transition cursor-pointer group shadow"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <Library className="size-4 text-indigo-400 group-hover:scale-110 transition" />
+                      <span className="text-[9px] font-bold text-indigo-300 uppercase px-1.5 py-0.5 rounded bg-indigo-500/20">120 kWp</span>
+                    </div>
+                    <strong className="text-xs text-white font-semibold group-hover:text-indigo-300">KMC Library</strong>
+                    <span className="text-[10px] text-slate-400">Health Sciences</span>
+                  </button>
+                </div>
+              </div>
 
               <div className="flex flex-wrap items-center gap-3 pt-2">
                 <Button
@@ -490,12 +568,12 @@ export function ManipalGlobeLanding() {
           >
             <div ref={containerRef} className="h-full w-full cursor-grab active:cursor-grabbing" />
 
-            {/* Manual Zoom In / Zoom Out Floating Controls */}
+            {/* Manual Zoom Controls */}
             <div className="absolute top-6 right-6 z-20 flex flex-col gap-1.5 rounded-2xl border border-white/15 bg-slate-950/80 p-1 shadow-xl backdrop-blur-md">
               <button
                 type="button"
                 onClick={handleZoomIn}
-                title="Zoom In (or use mouse scroll / trackpad pinch)"
+                title="Zoom In"
                 aria-label="Zoom In"
                 className="flex size-8 items-center justify-center rounded-xl text-slate-200 hover:bg-white/15 hover:text-white transition cursor-pointer"
               >
@@ -505,22 +583,22 @@ export function ManipalGlobeLanding() {
               <button
                 type="button"
                 onClick={handleZoomOut}
-                title="Zoom Out (or use mouse scroll / trackpad pinch)"
+                title="Zoom Out"
                 aria-label="Zoom Out"
                 className="flex size-8 items-center justify-center rounded-xl text-slate-200 hover:bg-white/15 hover:text-white transition cursor-pointer"
               >
                 <Minus className="size-4" />
               </button>
             </div>
-
           </div>
         </section>
       </div>
 
-      {/* AB3 3D Holographic Digital Twin & Intelligence Cards Modal */}
+      {/* 3D Holographic Digital Twin & Intelligence Modal */}
       <AB3BuildingModal
-        isOpen={isAB3ModalOpen}
-        onClose={() => setIsAB3ModalOpen(false)}
+        isOpen={isBuildingModalOpen}
+        onClose={() => setIsBuildingModalOpen(false)}
+        buildingId={activeBuildingId}
       />
     </div>
   );

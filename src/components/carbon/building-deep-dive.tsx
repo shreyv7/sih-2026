@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -36,19 +36,14 @@ import {
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import {
-  ab3AnomalyEventDetails,
-  ab3HourlyProfile,
-  ab3InterventionPortfolio,
-  ab3MonthlyData,
-  ab3ProfileSpecs,
-  ab3VerificationDetails,
-  ab3AskCarbonQA,
+  getBuildingDeepDiveData,
   type Intervention,
 } from "@/lib/carbon-data";
 import { useCarbon } from "@/lib/carbon-store";
 import { cn } from "@/lib/utils";
 
 interface BuildingDeepDiveProps {
+  buildingId?: string;
   onJumpToSection?: (sectionId: string) => void;
 }
 
@@ -66,34 +61,51 @@ type TooltipState = {
   label?: string;
 };
 
-export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
+export function BuildingDeepDive({
+  buildingId = "ab3",
+  onJumpToSection,
+}: BuildingDeepDiveProps) {
   const { addApproval, setApprovalsOpen } = useCarbon();
+
+  // Load building specific data
+  const data = useMemo(() => getBuildingDeepDiveData(buildingId), [buildingId]);
+  const {
+    specs,
+    monthlyData,
+    hourlyProfile,
+    anomalyDetails,
+    interventions,
+    verification,
+    askCarbonQA,
+  } = data;
 
   // State for Section 1: Visual switcher (Monthly vs 24-hr)
   const [measurementTab, setMeasurementTab] = useState<"monthly" | "hourly">("hourly");
 
   // State for Section 3: Action Lab optimizer
-  const [budget, setBudget] = useState<number>(2.5); // ₹2.5 Lakh default
-  const [selectedInterventionIds, setSelectedInterventionIds] = useState<string[]>([
-    "ab3_fcu_isolation",
-    "ab3_night_setback",
-    "ab3_solar_synced_loads",
-  ]);
+  const [budget, setBudget] = useState<number>(3.0);
+  const [selectedInterventionIds, setSelectedInterventionIds] = useState<string[]>([]);
   const [approvalSubmitted, setApprovalSubmitted] = useState<boolean>(false);
+
+  // Initialize selected interventions whenever building changes
+  useEffect(() => {
+    setSelectedInterventionIds(interventions.slice(0, 3).map((item) => item.id));
+    setActiveQuery("");
+    setInputPrompt("");
+    setApprovalSubmitted(false);
+  }, [buildingId, interventions]);
 
   // State for Section 5: Ask Carbon Prompt
   const [inputPrompt, setInputPrompt] = useState<string>("");
-  const [activeQuery, setActiveQuery] = useState<string>(
-    ab3AskCarbonQA[0]?.question ?? ""
-  );
+  const [activeQuery, setActiveQuery] = useState<string>("");
 
   // Computed for Action Lab
   const activeInterventions = useMemo(
     () =>
-      ab3InterventionPortfolio.filter((item) =>
+      interventions.filter((item) =>
         selectedInterventionIds.includes(item.id)
       ),
-    [selectedInterventionIds]
+    [interventions, selectedInterventionIds]
   );
 
   const totalCost = useMemo(
@@ -117,18 +129,21 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
 
   // What-if simulated data
   const whatIfSeries = useMemo(() => {
-    const ratio = Math.min(totalReduction / 80, 0.48);
-    const months = ["Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun"];
+    const baselineMax = Math.max(...monthlyData.map((m) => m.totalKWh / 1000 * 0.8), 30);
+    const ratio = Math.min(totalReduction / (specs.carbonFootprintTCO2e || 80), 0.55);
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    
     return months.map((m, i) => {
-      const base = 28 + Math.sin((i / 12) * Math.PI * 2) * 5;
+      const monthMetric = monthlyData.find((item) => item.month === m);
+      const base = monthMetric ? Number((monthMetric.gridKWh * 0.8 / 1000).toFixed(1)) : 25;
       const ramp = Math.min(1, (i + 1) / 3.5);
       return {
         month: m,
-        baseline: Number(base.toFixed(1)),
+        baseline: base,
         simulated: Number((base * (1 - ratio * ramp)).toFixed(1)),
       };
     });
-  }, [totalReduction]);
+  }, [monthlyData, specs.carbonFootprintTCO2e, totalReduction]);
 
   const toggleIntervention = (id: string) => {
     setSelectedInterventionIds((prev) =>
@@ -142,17 +157,17 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
     addApproval({
       title:
         activeInterventions.length === 1
-          ? first?.name ?? "AB3 Optimization Action"
-          : `AB3 Portfolio (${activeInterventions.length} Interventions)`,
-      building: "Academic Block 3 (AB3)",
+          ? first?.name ?? `${specs.name} Optimization Action`
+          : `${specs.name} Portfolio (${activeInterventions.length} Actions)`,
+      building: specs.name,
       reductionMin: Math.round(totalReduction * 0.9),
       reductionMax: Math.round(totalReduction * 1.1),
       savingLakh: Number(totalSavings.toFixed(2)),
       confidence: "High",
       evidence: [
-        "SCADA Chiller Plant Logs",
-        "Sub-meter AHU feeds",
-        "Academic Timetable Feed",
+        `${specs.name} Telemetry Ingestion`,
+        "SCADA / Sub-meter feeds",
+        "Calibrated M&V Baseline",
       ],
     });
     setApprovalSubmitted(true);
@@ -162,30 +177,31 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
   };
 
   const activeQA = useMemo(() => {
+    if (!activeQuery) return null;
     const q = activeQuery.toLowerCase().trim();
-    const matched = ab3AskCarbonQA.find((item) => item.question === activeQuery);
+    const matched = askCarbonQA.find((item) => item.question === activeQuery);
     if (matched) return matched;
 
-    if (q.includes("chiller") || q.includes("dec") || q.includes("winter") || q.includes("break")) {
-      return ab3AskCarbonQA[0]!;
+    if (q.includes("chiller") || q.includes("ac") || q.includes("overnight") || q.includes("dec") || q.includes("aug") || q.includes("sunday")) {
+      return askCarbonQA[0]!;
     }
-    if (q.includes("solar") || q.includes("load") || q.includes("rooftop") || q.includes("generation")) {
-      return ab3AskCarbonQA[1]!;
+    if (q.includes("solar") || q.includes("load") || q.includes("rooftop") || q.includes("generation") || q.includes("offset")) {
+      return askCarbonQA[1]!;
     }
     if (q.includes("carbon") || q.includes("reduction") || q.includes("opportunity") || q.includes("saving") || q.includes("footprint")) {
-      return ab3AskCarbonQA[2]!;
+      return askCarbonQA[2]!;
     }
 
     return {
       question: activeQuery,
-      summary: `Academic Block 3 has an audited baseline footprint of 168.4 tCO₂e/yr. Across 4 prioritized energy & HVAC interventions, AB3 has a total addressable reduction opportunity of 75.7 tCO₂e/year (approx. 45% of footprint).`,
-      explanation: `Telemetry indicates peak loads are driven by the central chiller loop (226 kW peak) and classroom AHU fan coils, partially balanced by 65 kWp rooftop solar generating ~9,800 kWh/month.`,
-      recommendation: `Deploy high-confidence actions (Night HVAC setback & BMS Timetable Lockout) to save ₹7.48 Lakh/yr with sub-6-month payback.`,
+      summary: `${specs.name} has an audited baseline footprint of ${specs.carbonFootprintTCO2e} tCO₂e/yr. Across 4 prioritized energy & HVAC interventions, it has an addressable reduction opportunity with payback under 12 months.`,
+      explanation: `Telemetry indicates peak loads are driven by HVAC and cooling, offset by the ${specs.solarCapacityKWp} kWp rooftop solar installation.`,
+      recommendation: `Deploy high-confidence actions for ${specs.name} to maximize grid tariff savings.`,
       confidence: "High",
-      sources: ["AB3 Sub-metering", "SCADA Logs", "Timetable Calendar"],
+      sources: [`${specs.name} Sub-metering`, "Telemetry Feed"],
       evidence: [],
     };
-  }, [activeQuery]);
+  }, [activeQuery, askCarbonQA, specs]);
 
 
   return (
@@ -208,11 +224,11 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
                   STAGE 1 · CONTINUOUS MEASUREMENT
                 </span>
                 <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
-                  98% Coverage
+                  Telemetry Active
                 </span>
               </div>
               <h3 className="text-base sm:text-lg font-bold text-white">
-                Energy & Carbon Baseload Telemetry
+                Energy & Carbon Baseload Telemetry · {specs.name}
               </h3>
             </div>
           </div>
@@ -253,12 +269,12 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               Carbon Footprint
             </p>
             <p className="mt-1 text-2xl font-bold tracking-tight text-white">
-              {ab3ProfileSpecs.carbonFootprintTCO2e}{" "}
+              {specs.carbonFootprintTCO2e}{" "}
               <span className="text-xs font-normal text-slate-400">tCO₂e/yr</span>
             </p>
             <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-400 font-medium">
               <TrendingUp className="size-3" />
-              <span>+8.4% vs Baseline</span>
+              <span>Scope 2 Baseline</span>
             </div>
           </div>
 
@@ -267,11 +283,11 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               Annual Energy
             </p>
             <p className="mt-1 text-2xl font-bold tracking-tight text-white">
-              {ab3ProfileSpecs.annualGridEnergyMWh}{" "}
+              {specs.annualGridEnergyMWh}{" "}
               <span className="text-xs font-normal text-slate-400">MWh/yr</span>
             </p>
             <p className="mt-1 text-[11px] text-emerald-400 font-medium">
-              Grid: 74% · Solar: 26%
+              Rate: ₹{specs.electricityRateINR}/kWh
             </p>
           </div>
 
@@ -280,11 +296,11 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               Observed EPI Benchmark
             </p>
             <p className="mt-1 text-2xl font-bold tracking-tight text-white">
-              {ab3ProfileSpecs.observedEPI}{" "}
+              {specs.observedEPI}{" "}
               <span className="text-xs font-normal text-slate-400">kWh/m²</span>
             </p>
             <p className="mt-1 text-[11px] text-slate-400">
-              ECBC Ref: {ab3ProfileSpecs.benchmarkEPI} kWh/m²
+              ECBC Ref: {specs.benchmarkEPI} kWh/m²
             </p>
           </div>
 
@@ -293,10 +309,10 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               Rooftop Solar Yield
             </p>
             <p className="mt-1 text-2xl font-bold tracking-tight text-emerald-400">
-              65 <span className="text-xs font-normal text-slate-400">kWp</span>
+              {specs.solarCapacityKWp} <span className="text-xs font-normal text-slate-400">kWp</span>
             </p>
             <p className="mt-1 text-[11px] text-slate-300">
-              ~9,800 kWh/mo (74% self)
+              Grid-Tied Rooftop PV
             </p>
           </div>
         </div>
@@ -306,18 +322,20 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
           <div className="mb-3 flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-300">
               {measurementTab === "hourly"
-                ? "24-Hour Term Weekday Power Flow (Building kW vs Solar kW vs Chiller Load)"
+                ? "24-Hour Diurnal Power Flow (Building Load kW vs Solar Output kW vs Grid Draw)"
                 : "12-Month Energy Profile (Grid Draw vs Rooftop Solar vs Average Temp)"}
             </span>
             <span className="text-[11px] text-slate-400">
-              {measurementTab === "hourly" ? "Peak Hour: 11:00 AM (226 kW)" : "Annual: 3,18,000 kWh"}
+              {measurementTab === "hourly"
+                ? `Peak Load: ${Math.max(...hourlyProfile.map((h) => h.buildingLoadKW))} kW`
+                : `Annual Load: ${monthlyData.reduce((sum, m) => sum + m.totalKWh, 0).toLocaleString()} kWh`}
             </span>
           </div>
 
           {measurementTab === "hourly" ? (
             <div className="h-[220px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={ab3HourlyProfile} margin={{ top: 5, right: 10, bottom: 0, left: -20 }}>
+                <ComposedChart data={hourlyProfile} margin={{ top: 5, right: 10, bottom: 0, left: -20 }}>
                   <CartesianGrid stroke="#334155" strokeDasharray="3 3" opacity={0.3} vertical={false} />
                   <XAxis dataKey="timeLabel" stroke="#64748b" fontSize={10} tickLine={false} />
                   <YAxis stroke="#64748b" fontSize={10} tickLine={false} unit=" kW" width={50} />
@@ -354,7 +372,7 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
           ) : (
             <div className="h-[220px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={ab3MonthlyData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                <ComposedChart data={monthlyData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                   <CartesianGrid stroke="#334155" strokeDasharray="3 3" opacity={0.3} vertical={false} />
                   <XAxis dataKey="month" stroke="#64748b" fontSize={10} tickLine={false} />
                   <YAxis stroke="#64748b" fontSize={10} tickLine={false} unit="k" width={40} tickFormatter={(v) => `${(v / 1000).toFixed(0)}`} />
@@ -373,33 +391,33 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
           <div className="rounded-2xl border border-white/6 bg-white/4 p-3.5 space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="font-semibold text-slate-300">Sub-load Distribution</span>
-              <span className="text-[10px] text-slate-400">Centralised Screw Chiller Dominant</span>
+              <span className="text-[10px] text-slate-400">Primary Systems</span>
             </div>
 
             <div className="space-y-1.5 pt-1">
               <div>
                 <div className="flex justify-between text-[11px] text-slate-300 mb-0.5">
-                  <span>HVAC & Chiller Plant (120 TR + Pumps)</span>
-                  <span className="font-bold text-amber-400">62%</span>
+                  <span>HVAC & Cooling Systems</span>
+                  <span className="font-bold text-amber-400">58%</span>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
-                  <div className="h-full bg-amber-400 rounded-full" style={{ width: "62%" }} />
+                  <div className="h-full bg-amber-400 rounded-full" style={{ width: "58%" }} />
                 </div>
               </div>
 
               <div>
                 <div className="flex justify-between text-[11px] text-slate-300 mb-0.5">
-                  <span>Plug & Lab Computing Loads</span>
-                  <span className="font-bold text-cyan-400">20%</span>
+                  <span>Power, Plug & Equipment Loads</span>
+                  <span className="font-bold text-cyan-400">24%</span>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
-                  <div className="h-full bg-cyan-400 rounded-full" style={{ width: "20%" }} />
+                  <div className="h-full bg-cyan-400 rounded-full" style={{ width: "24%" }} />
                 </div>
               </div>
 
               <div>
                 <div className="flex justify-between text-[11px] text-slate-300 mb-0.5">
-                  <span>LED Lighting & Corridor Relays</span>
+                  <span>Interior & Exterior Lighting</span>
                   <span className="font-bold text-emerald-400">18%</span>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
@@ -411,23 +429,23 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
 
           {/* Infrastructure Specs */}
           <div className="rounded-2xl border border-white/6 bg-white/4 p-3.5 flex flex-col justify-between text-xs space-y-1">
-            <span className="font-semibold text-slate-300">Building Hardware Specs (AB3.pdf)</span>
+            <span className="font-semibold text-slate-300">Building Hardware Specs ({specs.name})</span>
             <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
               <div className="rounded-lg bg-black/30 p-2 border border-white/5">
-                <span className="text-slate-400 block text-[10px]">Cooling Plant</span>
-                <strong className="text-white">120 TR Centralised</strong>
+                <span className="text-slate-400 block text-[10px]">Structure Type</span>
+                <strong className="text-white truncate block">{specs.type}</strong>
               </div>
               <div className="rounded-lg bg-black/30 p-2 border border-white/5">
-                <span className="text-slate-400 block text-[10px]">Terminal Units</span>
-                <strong className="text-white">32 FCUs (16 Rooms)</strong>
+                <span className="text-slate-400 block text-[10px]">Floors</span>
+                <strong className="text-white">{specs.floors} Levels</strong>
               </div>
               <div className="rounded-lg bg-black/30 p-2 border border-white/5">
                 <span className="text-slate-400 block text-[10px]">Built-up Area</span>
-                <strong className="text-white">3,440 m² (4 Floors)</strong>
+                <strong className="text-white">{specs.builtUpAreaM2.toLocaleString()} m²</strong>
               </div>
               <div className="rounded-lg bg-black/30 p-2 border border-white/5">
-                <span className="text-slate-400 block text-[10px]">Seating Design</span>
-                <strong className="text-white">1,920 Capacity</strong>
+                <span className="text-slate-400 block text-[10px]">Solar PV</span>
+                <strong className="text-emerald-300">{specs.solarCapacityKWp} kWp Array</strong>
               </div>
             </div>
           </div>
@@ -456,15 +474,15 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
                 </span>
               </div>
               <h3 className="text-base sm:text-lg font-bold text-white">
-                {ab3AnomalyEventDetails.title} ({ab3AnomalyEventDetails.eventId})
+                {anomalyDetails.title} ({anomalyDetails.eventId})
               </h3>
             </div>
           </div>
 
           <div className="text-right">
-            <span className="text-xs text-slate-400 block">Incident Timestamp</span>
+            <span className="text-xs text-slate-400 block">Incident Window</span>
             <span className="text-xs font-bold text-amber-300">
-              {ab3AnomalyEventDetails.timestamp}
+              {anomalyDetails.timestamp}
             </span>
           </div>
         </div>
@@ -477,13 +495,13 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
                 Root Cause Synthesis (Hardware-Agnostic Analytical Engine)
               </p>
               <p className="mt-1.5 text-xs sm:text-sm leading-relaxed text-slate-200">
-                {ab3AnomalyEventDetails.rootCause}
+                {anomalyDetails.rootCause}
               </p>
             </div>
 
             {/* Evidence Signals Matrix */}
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              {ab3AnomalyEventDetails.evidenceSignals.map((signal) => (
+              {anomalyDetails.evidenceSignals.map((signal) => (
                 <div
                   key={signal.label}
                   className="rounded-xl border border-white/6 bg-black/40 p-2.5"
@@ -502,30 +520,30 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
                 Baseline Deviation
               </p>
               <p className="text-3xl font-extrabold text-amber-300">
-                +{ab3AnomalyEventDetails.deviationPct}%
+                +{anomalyDetails.deviationPct}%
               </p>
               <p className="text-xs text-slate-400 mt-0.5">
-                {ab3AnomalyEventDetails.actualEnergyKWh} kWh vs {ab3AnomalyEventDetails.expectedBaselineKWh} kWh expected
+                {anomalyDetails.actualEnergyKWh} kWh vs {anomalyDetails.expectedBaselineKWh} kWh baseline
               </p>
             </div>
 
             <div className="border-t border-white/10 pt-2.5">
               <p className="text-[10px] uppercase text-slate-400">Avoidable Financial Loss</p>
               <p className="text-lg font-bold text-white">
-                {ab3AnomalyEventDetails.avoidableCostLossINR}
+                {anomalyDetails.avoidableCostLossINR}
               </p>
             </div>
           </div>
         </div>
 
-        {/* Telemetry Debug Log (Hardware-Agnostic Ingestion) */}
+        {/* Telemetry Debug Log */}
         <div className="mt-4 rounded-xl border border-white/6 bg-black/50 p-3">
           <div className="flex items-center justify-between text-[11px] text-slate-400 mb-2">
-            <span className="font-mono text-emerald-400">telemetry_fields (MIT_AB3)</span>
-            <span>Canonical Data Schema · Tier 1 BMS</span>
+            <span className="font-mono text-emerald-400">telemetry_ingestion ({specs.name})</span>
+            <span>Canonical Data Schema · Tier 1 IoT/BMS</span>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-6 font-mono text-[10px]">
-            {Object.entries(ab3AnomalyEventDetails.telemetryFields).map(([key, val]) => (
+            {Object.entries(anomalyDetails.telemetryFields).map(([key, val]) => (
               <div key={key} className="rounded bg-white/4 p-1.5">
                 <span className="text-slate-500 block truncate">{key}</span>
                 <span className="text-slate-200 font-semibold truncate">{val}</span>
@@ -580,7 +598,7 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               <p className="text-2xl font-bold text-white">
                 ₹{(budget * 100000).toLocaleString("en-IN")}{" "}
                 <span className="text-xs font-normal text-slate-400">
-                  (Used: ₹{totalCost.toFixed(2)}L)
+                  (Selected CAPEX: ₹{totalCost.toFixed(2)}L)
                 </span>
               </p>
             </div>
@@ -619,7 +637,7 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
             <p className="text-xs font-semibold text-slate-300">
               Ranked Candidate Interventions (Toggle to simulate):
             </p>
-            {ab3InterventionPortfolio.map((item) => {
+            {interventions.map((item) => {
               const isSelected = selectedInterventionIds.includes(item.id);
               return (
                 <button
@@ -751,7 +769,7 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
                 </span>
               </div>
               <h3 className="text-base sm:text-lg font-bold text-white">
-                {ab3VerificationDetails.title}
+                {verification.title}
               </h3>
             </div>
           </div>
@@ -759,7 +777,7 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
           <div className="text-right">
             <span className="text-xs text-slate-400 block">Audit Proof Ledger</span>
             <span className="text-xs font-mono font-bold text-emerald-300">
-              {ab3VerificationDetails.auditId}
+              {verification.auditId}
             </span>
           </div>
         </div>
@@ -771,10 +789,10 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               Off-Hours Baseline
             </p>
             <p className="mt-1 text-2xl font-bold tracking-tight text-slate-300">
-              {ab3VerificationDetails.baselineBreakOffHoursKWh}{" "}
+              {verification.baselineBreakOffHoursKWh}{" "}
               <span className="text-xs font-normal text-slate-500">kWh/day</span>
             </p>
-            <p className="mt-1 text-[10px] text-slate-400">Chiller unconstrained</p>
+            <p className="mt-1 text-[10px] text-slate-400">Unconstrained operation</p>
           </div>
 
           <div className="rounded-2xl border border-emerald-400/25 bg-emerald-950/20 p-3.5">
@@ -782,11 +800,11 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               Normalized Actual
             </p>
             <p className="mt-1 text-2xl font-bold tracking-tight text-emerald-300">
-              {ab3VerificationDetails.verifiedBreakOffHoursKWh}{" "}
+              {verification.verifiedBreakOffHoursKWh}{" "}
               <span className="text-xs font-normal text-emerald-400">kWh/day</span>
             </p>
             <p className="mt-1 text-[11px] font-bold text-emerald-400">
-              -{ab3VerificationDetails.dropPct}% Verified Drop
+              -{verification.dropPct}% Verified Drop
             </p>
           </div>
 
@@ -795,10 +813,10 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               Realized Annual Save
             </p>
             <p className="mt-1 text-2xl font-bold tracking-tight text-white">
-              ₹{(ab3VerificationDetails.annualCostSavedINR).toLocaleString("en-IN")}
+              ₹{(verification.annualCostSavedINR).toLocaleString("en-IN")}
             </p>
             <p className="mt-1 text-[10px] text-slate-400">
-              {ab3VerificationDetails.annualEnergySavedKWh.toLocaleString()} kWh/yr saved
+              {verification.annualEnergySavedKWh.toLocaleString()} kWh/yr saved
             </p>
           </div>
 
@@ -807,10 +825,10 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
               Prediction Accuracy
             </p>
             <p className="mt-1 text-2xl font-bold tracking-tight text-cyan-400">
-              {100 - ab3VerificationDetails.predictionErrorPct}%
+              {100 - verification.predictionErrorPct}%
             </p>
             <p className="mt-1 text-[10px] text-slate-400">
-              Error: {ab3VerificationDetails.predictionErrorPct}% vs Forecast
+              Error: {verification.predictionErrorPct}% vs Forecast
             </p>
           </div>
         </div>
@@ -824,14 +842,14 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
 
           <div className="h-[200px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={ab3VerificationDetails.series} margin={{ top: 10, right: 10, bottom: 0, left: -20 }}>
+              <ComposedChart data={verification.series} margin={{ top: 10, right: 10, bottom: 0, left: -20 }}>
                 <CartesianGrid stroke="#334155" strokeDasharray="3 3" opacity={0.25} vertical={false} />
                 <XAxis dataKey="label" stroke="#64748b" fontSize={10} tickLine={false} />
                 <YAxis stroke="#64748b" fontSize={10} tickLine={false} unit=" kWh" />
                 <Tooltip content={<CustomVerificationTooltip />} />
                 <Line type="monotone" dataKey="baseline" stroke="#94a3b8" strokeDasharray="4 4" strokeWidth={1.8} dot={false} name="Expected Baseline" />
                 <Line type="monotone" dataKey="actual" stroke="#34d399" strokeWidth={2.8} dot={{ fill: "#34d399", r: 3 }} name="Actual Measured" />
-                <ReferenceLine x="Start" stroke="#f59e0b" strokeDasharray="3 3" label={{ value: "BMS Lockout Deployed", fill: "#f59e0b", fontSize: 10 }} />
+                <ReferenceLine x="Start" stroke="#f59e0b" strokeDasharray="3 3" label={{ value: "Intervention Deployed", fill: "#f59e0b", fontSize: 10 }} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -843,9 +861,10 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
       {/* ========================================================================= */}
       <section
         id="section-ask"
-        className="scroll-mt-6 rounded-3xl border border-indigo-500/30 bg-gradient-to-b from-slate-950/90 to-indigo-950/20 p-5 sm:p-6 shadow-2xl backdrop-blur-xl transition hover:border-indigo-500/50"
+        className="scroll-mt-6 rounded-3xl border border-indigo-500/30 bg-gradient-to-b from-slate-950/90 to-indigo-950/20 p-5 sm:p-6 shadow-2xl backdrop-blur-xl transition hover:border-indigo-500/50 flex flex-col justify-between"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-indigo-500/20 pb-4">
+        {/* Chatbot Header */}
+        <div className="flex items-center justify-between border-b border-indigo-500/20 pb-4">
           <div className="flex items-center gap-2.5">
             <div className="flex size-8 items-center justify-center rounded-xl bg-indigo-400/10 text-indigo-300 border border-indigo-400/30 shadow-[0_0_15px_rgba(99,102,241,0.3)]">
               <Bot className="size-4" />
@@ -860,92 +879,116 @@ export function BuildingDeepDive({ onJumpToSection }: BuildingDeepDiveProps) {
                 </span>
               </div>
               <h3 className="text-base sm:text-lg font-bold text-white">
-                Contextual Intelligence for Academic Block 3
+                Contextual Intelligence for {specs.name}
               </h3>
             </div>
           </div>
 
-          <span className="text-xs text-slate-400">
-            Ground Truth: AB3.pdf Synthetic Dataset
-          </span>
-        </div>
-
-        {/* Prompt Input Box */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (inputPrompt.trim()) {
-              setActiveQuery(inputPrompt.trim());
-            }
-          }}
-          className="mt-5 relative flex items-center"
-        >
-          <div className="relative w-full">
-            <input
-              type="text"
-              value={inputPrompt}
-              onChange={(e) => setInputPrompt(e.target.value)}
-              placeholder="Ask a question about Academic Block 3 (e.g. chiller anomaly, solar sync, carbon reduction)..."
-              className="w-full rounded-2xl border border-indigo-500/30 bg-slate-900/80 py-3.5 pl-4 pr-24 text-sm text-white placeholder-slate-400 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30 backdrop-blur-md"
-            />
-            <button
-              type="submit"
-              className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500 active:scale-95 cursor-pointer shadow-md shadow-indigo-600/30"
-            >
-              <span>Ask</span>
-              <Send className="size-3.5" />
-            </button>
-          </div>
-        </form>
-
-        {/* Standard Prompts */}
-        <div className="mt-4 space-y-2">
-          <p className="text-xs font-medium text-slate-400">Standard Prompts:</p>
-          <div className="flex flex-wrap gap-2">
-            {ab3AskCarbonQA.map((item) => (
-              <button
-                key={item.question}
-                type="button"
-                onClick={() => {
-                  setInputPrompt(item.question);
-                  setActiveQuery(item.question);
-                }}
-                className={cn(
-                  "rounded-full border px-3.5 py-1.5 text-xs font-medium transition cursor-pointer text-left",
-                  activeQuery === item.question
-                    ? "border-indigo-400/60 bg-indigo-500/25 text-white shadow-[0_0_12px_rgba(99,102,241,0.25)]"
-                    : "border-white/10 bg-white/5 text-slate-400 hover:text-white hover:border-white/20"
-                )}
-              >
-                {item.question}
-              </button>
-            ))}
+          <div className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-[11px] font-medium text-emerald-400">
+            <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Assistant Active</span>
           </div>
         </div>
 
-        {/* Hardcoded Answer Result Box */}
-        {activeQA && (
-          <div className="mt-5 rounded-2xl border border-indigo-500/20 bg-slate-900/70 p-5 space-y-3 backdrop-blur-md">
-            <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
-              <div className="flex items-center gap-2 text-xs font-semibold text-indigo-300">
-                <Sparkles className="size-4 text-indigo-400" />
-                <span>Grounded AI Answer</span>
+        {/* Chat Message Stream */}
+        <div className="my-5 min-h-[140px] space-y-4">
+          {!activeQA ? (
+            /* Initial Welcoming Bot Message */
+            <div className="flex items-start gap-3">
+              <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
+                <Bot className="size-4" />
               </div>
-              <span className="text-[11px] text-slate-400 font-mono">Confidence: High</span>
+              <div className="rounded-2xl rounded-tl-sm bg-slate-900/90 border border-white/10 px-4 py-3 text-sm text-slate-300 shadow-md max-w-2xl leading-relaxed">
+                <p>
+                  Hello! Ask me any question regarding {specs.name}'s energy consumption, solar generation, HVAC diagnostics, or carbon reduction opportunities. Select a standard prompt below or type your question to begin.
+                </p>
+              </div>
             </div>
-
-            <div className="space-y-2.5 text-sm text-slate-200 leading-relaxed">
-              <p className="font-semibold text-white">{activeQA.summary}</p>
-              <p className="text-slate-300 text-xs leading-normal">{activeQA.explanation}</p>
-              {activeQA.recommendation && (
-                <div className="mt-2 rounded-xl border border-emerald-500/20 bg-emerald-950/25 p-3 text-xs text-emerald-200">
-                  <strong className="text-emerald-400 font-semibold block mb-0.5">Recommended Action:</strong>
-                  {activeQA.recommendation}
+          ) : (
+            /* Q&A Chat Conversation */
+            <div className="space-y-4">
+              {/* User Question (Right aligned) */}
+              <div className="flex items-start justify-end">
+                <div className="rounded-2xl rounded-tr-sm bg-indigo-600 px-4 py-2.5 text-sm text-white shadow-md max-w-[85%] leading-relaxed">
+                  <p className="font-medium">{activeQA.question}</p>
                 </div>
-              )}
+              </div>
+
+              {/* Bot Answer (Left aligned) */}
+              <div className="flex items-start gap-3">
+                <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 mt-0.5">
+                  <Bot className="size-4" />
+                </div>
+                <div className="rounded-2xl rounded-tl-sm bg-slate-900/90 border border-indigo-500/30 p-4 text-sm text-slate-200 shadow-md space-y-2.5 max-w-[90%] backdrop-blur-md">
+                  <p className="font-medium text-white leading-relaxed">{activeQA.summary}</p>
+                  <p className="text-xs text-slate-300 leading-relaxed">{activeQA.explanation}</p>
+                  {activeQA.recommendation && (
+                    <div className="mt-2 rounded-xl border border-emerald-500/20 bg-emerald-950/25 p-3 text-xs text-emerald-200">
+                      <strong className="text-emerald-400 font-semibold block mb-0.5">Recommended Action:</strong>
+                      {activeQA.recommendation}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Bottom Area: Standard Prompts & Input Box */}
+        <div className="mt-auto border-t border-indigo-500/20 pt-4 space-y-3">
+          {/* Standard Prompts Chips */}
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-medium text-slate-400">Standard Prompts:</p>
+            <div className="flex flex-wrap gap-2">
+              {askCarbonQA.map((item) => (
+                <button
+                  key={item.question}
+                  type="button"
+                  onClick={() => {
+                    setInputPrompt(item.question);
+                    setActiveQuery(item.question);
+                  }}
+                  className={cn(
+                    "rounded-full border px-3.5 py-1.5 text-xs font-medium transition cursor-pointer text-left",
+                    activeQuery === item.question
+                      ? "border-indigo-400/60 bg-indigo-500/25 text-white shadow-[0_0_12px_rgba(99,102,241,0.25)]"
+                      : "border-white/10 bg-white/5 text-slate-400 hover:text-white hover:border-white/20"
+                  )}
+                >
+                  {item.question}
+                </button>
+              ))}
             </div>
           </div>
-        )}
+
+          {/* Prompt Input Box */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (inputPrompt.trim()) {
+                setActiveQuery(inputPrompt.trim());
+              }
+            }}
+            className="relative flex items-center pt-1"
+          >
+            <div className="relative w-full">
+              <input
+                type="text"
+                value={inputPrompt}
+                onChange={(e) => setInputPrompt(e.target.value)}
+                placeholder={`Ask about ${specs.name} energy, anomalies, solar sync, reduction...`}
+                className="w-full rounded-2xl border border-indigo-500/30 bg-slate-900/80 py-3.5 pl-4 pr-24 text-sm text-white placeholder-slate-400 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30 backdrop-blur-md"
+              />
+              <button
+                type="submit"
+                className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500 active:scale-95 cursor-pointer shadow-md shadow-indigo-600/30"
+              >
+                <span>Ask</span>
+                <Send className="size-3.5" />
+              </button>
+            </div>
+          </form>
+        </div>
       </section>
     </div>
   );
@@ -974,15 +1017,15 @@ function CustomMonthlyTooltip({ active, payload, label }: TooltipState) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-xl border border-white/15 bg-slate-950/95 p-3 text-xs shadow-2xl backdrop-blur-md">
-      <p className="font-bold text-white mb-1.5">{label} Month</p>
+      <p className="font-bold text-white mb-1.5">Month: {label}</p>
       {payload.map((p) => (
         <div key={p.dataKey} className="flex items-center justify-between gap-4 py-0.5">
           <span className="flex items-center gap-1.5 text-slate-400">
-            <span className="size-2 rounded-full" style={{ background: p.fill }} />
+            <span className="size-2 rounded-full" style={{ background: p.stroke || p.fill }} />
             {p.name}:
           </span>
           <span className="font-bold text-white font-mono">
-            {Number(p.value).toLocaleString()} kWh
+            {typeof p.value === "number" ? p.value.toLocaleString() : p.value} kWh
           </span>
         </div>
       ))}
@@ -993,12 +1036,15 @@ function CustomMonthlyTooltip({ active, payload, label }: TooltipState) {
 function CustomWhatIfTooltip({ active, payload, label }: TooltipState) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-xl border border-white/15 bg-slate-950/95 p-2.5 text-xs shadow-2xl backdrop-blur-md">
-      <p className="font-bold text-white mb-1">{label}</p>
+    <div className="rounded-xl border border-white/15 bg-slate-950/95 p-3 text-xs shadow-2xl backdrop-blur-md">
+      <p className="font-bold text-white mb-1.5">Month: {label}</p>
       {payload.map((p) => (
-        <div key={p.dataKey} className="flex items-center justify-between gap-3 py-0.5">
-          <span className="text-slate-400">{p.dataKey === "baseline" ? "Baseline" : "Post-Action"}:</span>
-          <span className="font-bold text-emerald-400 font-mono">{p.value} tCO₂e</span>
+        <div key={p.dataKey} className="flex items-center justify-between gap-4 py-0.5">
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <span className="size-2 rounded-full" style={{ background: p.stroke || p.fill }} />
+            {p.name === "baseline" ? "Historical Baseline" : "Simulated Path"}:
+          </span>
+          <span className="font-bold text-white font-mono">{p.value} tCO₂e</span>
         </div>
       ))}
     </div>
@@ -1008,11 +1054,14 @@ function CustomWhatIfTooltip({ active, payload, label }: TooltipState) {
 function CustomVerificationTooltip({ active, payload, label }: TooltipState) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-xl border border-white/15 bg-slate-950/95 p-2.5 text-xs shadow-2xl backdrop-blur-md">
-      <p className="font-bold text-white mb-1">{label}</p>
+    <div className="rounded-xl border border-white/15 bg-slate-950/95 p-3 text-xs shadow-2xl backdrop-blur-md">
+      <p className="font-bold text-white mb-1.5">Interval: {label}</p>
       {payload.map((p) => (
-        <div key={p.dataKey} className="flex items-center justify-between gap-3 py-0.5">
-          <span className="text-slate-400">{p.name}:</span>
+        <div key={p.dataKey} className="flex items-center justify-between gap-4 py-0.5">
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <span className="size-2 rounded-full" style={{ background: p.stroke || p.fill }} />
+            {p.name}:
+          </span>
           <span className="font-bold text-white font-mono">{p.value} kWh</span>
         </div>
       ))}
